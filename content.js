@@ -503,6 +503,83 @@ function onMouseMove(mouseMove) {
     }
 }
 
+// Libby support: Forward mouse events from the overlay to the content iframe
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initLibbySupport);
+} else {
+    initLibbySupport();
+}
+
+function initLibbySupport() {
+    const checkOverlay = () => {
+        // Scenario 1: We are in the middle frame with the overlay
+        const overlay = document.querySelector('.reader-affordance') || document.querySelector('.screen-lectern-open');
+        if (overlay && !overlay.dataset.zhongwenAttached) {
+            overlay.dataset.zhongwenAttached = 'true';
+            overlay.addEventListener('mousemove', (e) => {
+                // Find all iframes that might contain the book text
+                const iframes = document.querySelectorAll('iframe');
+                for (let i = 0; i < iframes.length; i++) {
+                    const iframe = iframes[i];
+                    const rect = iframe.getBoundingClientRect();
+
+                    // Check if the mouse is over this iframe
+                    if (e.clientX >= rect.left && e.clientX <= rect.right &&
+                        e.clientY >= rect.top && e.clientY <= rect.bottom) {
+
+                        // Calculate coordinates relative to the iframe
+                        const x = e.clientX - rect.left;
+                        const y = e.clientY - rect.top;
+
+                        // Send message to the iframe
+                        iframe.contentWindow.postMessage({
+                            type: 'zhongwen_mousemove',
+                            x: x,
+                            y: y,
+                            clientX: e.clientX, // Send original clientX for popup positioning if needed (though relative is usually better for elementFromPoint)
+                            clientY: e.clientY
+                        }, '*');
+                    }
+                }
+            });
+        }
+    };
+
+    // Check immediately
+    checkOverlay();
+
+    // Watch for dynamic changes (Libby is an SPA)
+    const observer = new MutationObserver((mutations) => {
+        checkOverlay();
+    });
+
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+
+    // Scenario 2: We are in the inner iframe receiving the message
+    window.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'zhongwen_mousemove') {
+            handleForwardedMouseMove(event.data);
+        }
+    });
+}
+
+function handleForwardedMouseMove(data) {
+    // Create a synthetic event-like object
+    const syntheticEvent = {
+        clientX: data.x,
+        clientY: data.y,
+        target: document.elementFromPoint(data.x, data.y),
+        altKey: false // Assuming no alt key for now, or we could forward it too
+    };
+
+    if (syntheticEvent.target) {
+        onMouseMove(syntheticEvent);
+    }
+}
+
 function triggerSearch() {
 
     let rangeNode = savedRangeNode;
@@ -716,7 +793,7 @@ function showPopup(html, elem, x, y, looseWidth) {
                 if (t >= 0) {
                     y = t;
                 }
-            } else  {
+            } else {
                 y += v;
             }
 
