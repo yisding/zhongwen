@@ -501,7 +501,13 @@ function onMouseMove(mouseMove) {
     let distance = Math.sqrt(dx * dx + dy * dy);
     if (distance > 4) {
         clearHighlight();
-        hidePopup();
+        if (isLibbyFrame) {
+            window.parent.postMessage({
+                type: 'zhongwen_hide_popup'
+            }, '*');
+        } else {
+            hidePopup();
+        }
     }
 }
 
