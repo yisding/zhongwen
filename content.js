@@ -511,6 +511,13 @@ if (document.readyState === 'loading') {
 }
 
 function initLibbySupport() {
+    // Only run on Libby domains or local files (for testing)
+    const isLibby = window.location.hostname.endsWith('libbyapp.com') ||
+        window.location.hostname.endsWith('overdrive.com');
+    const isLocal = window.location.protocol === 'file:';
+
+    if (!isLibby && !isLocal) return;
+
     const checkOverlay = () => {
         // Scenario 1: We are in the middle frame with the overlay
         const overlay = document.querySelector('.reader-affordance') || document.querySelector('.screen-lectern-open');
