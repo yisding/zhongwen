@@ -94,6 +94,8 @@ let savedSelStartOffset = 0;
 
 let savedSelEndList = [];
 
+let isLibbyFrame = false;
+
 function enableTab() {
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('keydown', onKeyDown);
@@ -149,20 +151,20 @@ function onKeyDown(keyDown) {
             break;
 
         case 66: // 'b'
-        {
-            let offset = selStartDelta;
-            for (let i = 0; i < 10; i++) {
-                selStartDelta = --offset;
-                let ret = triggerSearch();
-                if (ret === 0) {
-                    break;
-                } else if (ret === 2) {
-                    savedRangeNode = findPreviousTextNode(savedRangeNode.parentNode, savedRangeNode);
-                    savedRangeOffset = 0;
-                    offset = savedRangeNode.data.length;
+            {
+                let offset = selStartDelta;
+                for (let i = 0; i < 10; i++) {
+                    selStartDelta = --offset;
+                    let ret = triggerSearch();
+                    if (ret === 0) {
+                        break;
+                    } else if (ret === 2) {
+                        savedRangeNode = findPreviousTextNode(savedRangeNode.parentNode, savedRangeNode);
+                        savedRangeOffset = 0;
+                        offset = savedRangeNode.data.length;
+                    }
                 }
             }
-        }
             break;
 
         case 71: // 'g'
@@ -199,25 +201,25 @@ function onKeyDown(keyDown) {
             break;
 
         case 82: // 'r'
-        {
-            let entries = [];
-            for (let j = 0; j < savedSearchResults.length; j++) {
-                let entry = {
-                    simplified: savedSearchResults[j][0],
-                    traditional: savedSearchResults[j][1],
-                    pinyin: savedSearchResults[j][2],
-                    definition: savedSearchResults[j][3]
-                };
-                entries.push(entry);
+            {
+                let entries = [];
+                for (let j = 0; j < savedSearchResults.length; j++) {
+                    let entry = {
+                        simplified: savedSearchResults[j][0],
+                        traditional: savedSearchResults[j][1],
+                        pinyin: savedSearchResults[j][2],
+                        definition: savedSearchResults[j][3]
+                    };
+                    entries.push(entry);
+                }
+
+                chrome.runtime.sendMessage({
+                    'type': 'add',
+                    'entries': entries
+                });
+
+                showPopup('Added to word list.<p>Press Alt+W to open word list.', null, -1, -1);
             }
-
-            chrome.runtime.sendMessage({
-                'type': 'add',
-                'entries': entries
-            });
-
-            showPopup('Added to word list.<p>Press Alt+W to open word list.', null, -1, -1);
-        }
             break;
 
         case 83: // 's'
@@ -568,13 +570,53 @@ function initLibbySupport() {
     // Scenario 2: We are in the inner iframe receiving the message
     window.addEventListener('message', (event) => {
         if (event.data && event.data.type === 'zhongwen_mousemove') {
+            isLibbyFrame = true;  // Mark that we're in a Libby iframe
             handleForwardedMouseMove(event.data);
+        }
+    });
+
+    // Scenario 3: We are in the parent frame receiving popup data from iframe
+    window.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'zhongwen_show_popup') {
+            // Render popup in the parent frame
+            let popup = document.getElementById('zhongwen-window');
+
+            if (!popup) {
+                popup = document.createElement('div');
+                popup.setAttribute('id', 'zhongwen-window');
+                popup.style.position = 'fixed';  // Use fixed positioning for overlay
+                popup.style.zIndex = '2147483647';  // Maximum z-index
+                document.documentElement.appendChild(popup);
+            }
+
+            popup.style.width = 'auto';
+            popup.style.height = 'auto';
+            popup.style.maxWidth = '600px';
+            popup.className = `background-${event.data.background} tonecolor-${event.data.toneColorScheme}`;
+
+            $(popup).html(event.data.html);
+
+            popup.style.left = event.data.x + 'px';
+            popup.style.top = event.data.y + 'px';
+            popup.style.display = '';
+        } else if (event.data && event.data.type === 'zhongwen_hide_popup') {
+            let popup = document.getElementById('zhongwen-window');
+            if (popup) {
+                popup.style.display = 'none';
+                popup.textContent = '';
+            }
         }
     });
 }
 
 function handleForwardedMouseMove(data) {
-    // Create a synthetic event-like object
+    // Save parent frame coordinates for popup positioning
+    window.savedParentCoords = {
+        x: data.clientX,
+        y: data.clientY
+    };
+
+    // Create a synthetic event-like object using iframe-relative coordinates
     const syntheticEvent = {
         clientX: data.x,
         clientY: data.y,
@@ -630,9 +672,9 @@ function triggerSearch() {
     savedSelEndList = selEndList;
 
     chrome.runtime.sendMessage({
-            'type': 'search',
-            'text': text
-        },
+        'type': 'search',
+        'text': text
+    },
         processSearchResult
     );
 
@@ -645,7 +687,13 @@ function processSearchResult(result) {
     let selEndList = savedSelEndList;
 
     if (!result) {
-        hidePopup();
+        if (isLibbyFrame) {
+            window.parent.postMessage({
+                type: 'zhongwen_hide_popup'
+            }, '*');
+        } else {
+            hidePopup();
+        }
         clearHighlight();
         return;
     }
@@ -659,13 +707,33 @@ function processSearchResult(result) {
         let doc = rangeNode.ownerDocument;
         if (!doc) {
             clearHighlight();
-            hidePopup();
+            if (isLibbyFrame) {
+                window.parent.postMessage({
+                    type: 'zhongwen_hide_popup'
+                }, '*');
+            } else {
+                hidePopup();
+            }
             return;
         }
         highlightMatch(doc, rangeNode, selStartOffset, result.matchLen, selEndList);
     }
 
-    showPopup(makeHtml(result, config.toneColors), savedTarget, popX, popY, false);
+    if (isLibbyFrame) {
+        // Send popup data to parent frame for rendering
+        // Use savedParentCoords if available (set by handleForwardedMouseMove)
+        const coords = window.savedParentCoords || { x: popX, y: popY };
+        window.parent.postMessage({
+            type: 'zhongwen_show_popup',
+            html: makeHtml(result, config.toneColors),
+            x: coords.x,
+            y: coords.y,
+            background: config.background,
+            toneColorScheme: config.toneColorScheme
+        }, '*');
+    } else {
+        showPopup(makeHtml(result, config.toneColors), savedTarget, popX, popY, false);
+    }
 }
 
 // modifies selEndList as a side-effect
